@@ -7,6 +7,8 @@ typedef struct node node_t;
 
 typedef struct btree btree_t;
 
+void node_print(node_t* node);
+
 /**
  * The function allocates, dinamically, a pointer to the type btree
  *
