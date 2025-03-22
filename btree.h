@@ -48,6 +48,8 @@ node_t* btree_search(btree_t* tree, int key, int* pos);
 
 void btree_insert(btree_t* tree, int key);
 
+void btree_remove(btree_t* tree, int key);
+
 void btree_print(btree_t* tree);
 
 #endif // !BTREE_H
