@@ -1,4 +1,3 @@
-#include <cstddef>
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -6,13 +5,6 @@
 #include <stdlib.h>
 
 #include "btree.h"
-
-// Códigos de erro para retorno das funções
-#define BTREE_SUCCESS 0
-#define BTREE_ERROR_ALLOC -1
-#define BTREE_ERROR_NOT_FOUND -2
-#define BTREE_ERROR_DUPLICATE -3
-#define BTREE_ERROR_INVALID_PARAM -4
 
 struct node {
   size_t n_keys; // Quantidade de chaves armazenadas
@@ -124,53 +116,84 @@ node_t *node_search(node_t *node, int key, int *pos) {
     return node;
   }
 
-  // Mudança necessária: ao invés de pegar o próximo nó (ponteiro) é preciso
-  // fazer uma busca no arquivo binário
-  /**
-   * Nesse caso, o código não faz acessos "out of bounds" em node->children[i]
-   * pois o array de filhos possui t elementos, sendo eles ponteiros válidos ou
-   * NULL.
-   *
-   * Como sempre verificamos se i < node->n_keys na função node_keyat, nunca
-   * passaremos desse limite.
-   */
-  return node->children[i] ? node_search(node->children[i], key, pos) : NULL;
+  if (node->is_leaf)
+    return NULL;
+
+  // Busca recursivamente no filho apropriado
+  return node_search(node->children[i], key, pos);
 }
 
-void node_splitch(node_t *parent, int idx, size_t order) {
+/**
+ * Divide um nó filho quando está cheio
+ *
+ * @param parent Nó pai
+ * @param idx Índice do filho a ser dividido
+ * @param order Ordem da árvore
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_split_child(node_t *parent, int idx, size_t order) {
+  if (!parent || idx < 0 || idx > parent->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
   node_t *child = parent->children[idx];
+  if (!child)
+    return BTREE_ERROR_INVALID_PARAM;
 
   node_t *new_node = node_create(child->is_leaf, order);
+  if (!new_node)
+    return BTREE_ERROR_ALLOC;
 
   int mid = order / 2 - 1;
-  new_node->n_keys = mid;
+  new_node->n_keys = mid; // Metade das chaves vai para o novo nó
 
+  // Copia as chaves do nó filho para novo nó
   for (int i = 0; i < mid; i++)
-    new_node->keys[i] = child->keys[order / 2 + i];
+    new_node->keys[i] = child->keys[mid + 1 + i];
 
+  // Se não for folha, copia os ponteiros para filhos também
   if (!child->is_leaf)
     for (int i = 0; i < order / 2; i++)
-      new_node->children[i] = child->children[order / 2 + i];
+      new_node->children[i] = child->children[mid + 1 + i];
 
+  // Atualiza o número de chaves no filho
   child->n_keys = mid;
 
+  // Move os ponteiros para filhos no pai para abrir espaço
   for (int i = parent->n_keys; i > idx; i--)
     parent->children[i + 1] = parent->children[i];
 
+  // Liga o novo nó ao pai
   parent->children[idx + 1] = new_node;
 
+  // Move as chaves no pai para abrir espaço
   for (int i = parent->n_keys - 1; i >= idx; i--)
     parent->keys[i + 1] = parent->keys[i];
 
+  // Insere a chave do meio do filho no pai
   parent->keys[idx] = child->keys[mid];
   parent->n_keys++;
+
+  return BTREE_SUCCESS;
 }
 
-void node_insertnf(node_t *node, int key, size_t order) {
+/**
+ * Insere uma chave em um nó não cheio
+ *
+ * @param node Nó onde inserir
+ * @param key Chave a ser inserida
+ * @param order Ordem da árvore
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_insert_non_full(node_t *node, int key, size_t order) {
+  if (!node)
+    return BTREE_ERROR_INVALID_PARAM;
+
   int i = node->n_keys - 1;
 
   if (node->is_leaf) {
-    // insert key into sorted order
+    // Encontra a posição correta e insere a chave
     while (i >= 0 && key < node->keys[i]) {
       node->keys[i + 1] = node->keys[i];
       i--;
@@ -178,59 +201,95 @@ void node_insertnf(node_t *node, int key, size_t order) {
 
     node->keys[i + 1] = key;
     node->n_keys++;
+
+    return BTREE_SUCCESS;
   } else {
-    // find the child to insert key
+    // Encontra o filho onde a chave deve ser inserida
     while (i >= 0 && key < node->keys[i])
       i--;
 
     i++;
 
+    // Divide o filho, se cheio
     if (node->children[i]->n_keys == order - 1) {
-      // split child if full
-      node_splitch(node, i, order);
+      int result = node_split_child(node, i, order);
+      if (result != BTREE_SUCCESS)
+        return result;
 
-      // determine which of two children is the new one
+      // Decide qual dos filhos vai conter a chave
       if (node->keys[i] < key)
         i++;
     }
 
-    node_insertnf(node->children[i], key, order);
+    // Insere a chave recursivamente no filho apropriado
+    return node_insert_non_full(node->children[i], key, order);
   }
 }
 
+/**
+ * Insere uma chave na árvore
+ *
+ * @param root Ponteiro para o ponteiro da raiz
+ * @param key Chave a ser inserida
+ * @param order Ordem da árvore
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
 int node_insert(node_t **root, int key, int order) {
-  node_t *node = *root;
-  int pos = 0;
+  if (!root)
+    return BTREE_ERROR_INVALID_PARAM;
 
-  // se a chave já existir na árvore, atualiza o valor
-  if (node_search(node, key, &pos) != NULL)
-    return 0;
+  // Verifica se chave já existe
+  int pos;
+  if (*root && node_search(*root, key, &pos) != NULL)
+    return BTREE_ERROR_DUPLICATE;
 
-  if (!node) {
-    // create new root
+  // Se a raiz for NULL, cria uma nova raiz
+  if (!(*root)) {
     *root = node_create(true, order);
+    if (!(*root))
+      return BTREE_ERROR_ALLOC;
+
     (*root)->keys[0] = key;
     (*root)->n_keys = 1;
 
-    return 1;
-  } else {
-    if (node->n_keys == order - 1) {
-      // split root if full
-      node_t *new_root = node_create(false, order);
-      new_root->children[0] = node;
-      node_splitch(new_root, 0, order);
-      *root = new_root;
-
-      pos = 1;
-    }
-
-    node_insertnf(*root, key, order);
+    return BTREE_SUCCESS;
   }
 
-  return pos;
+  // Se raiz estiver cheia, cria nova raiz
+  if ((*root)->n_keys == order - 1) {
+    node_t *new_root = node_create(false, order);
+    if (!new_root)
+      return BTREE_ERROR_ALLOC;
+
+    new_root->children[0] = *root;
+    *root = new_root;
+
+    int result = node_split_child(new_root, 0, order);
+    if (result != BTREE_SUCCESS) {
+      new_root->children[0] = NULL;
+      node_destroy(new_root);
+      return result;
+    }
+
+    return node_insert_non_full(*root, key, order);
+  }
+
+  return node_insert_non_full(*root, key, order);
 }
 
-int node_keyidx(node_t *node, int key) {
+/**
+ * Encontra o índice de uma chave em um nó
+ *
+ * @param node Nó onde buscar
+ * @param key Chave a ser buscada
+ *
+ * @return Índice da chave ou -1 se não encontrada
+ */
+int node_key_idx(node_t *node, int key) {
+  if (!node)
+    return -1;
+
   for (int i = 0; i < node->n_keys; i++)
     if (node->keys[i] == key)
       return i;
@@ -238,374 +297,334 @@ int node_keyidx(node_t *node, int key) {
   return -1;
 }
 
-void node_rmleaf(node_t *node, int key, size_t order) {
+/**
+ * Encontra o predecessor de uma chave
+ *
+ * @param node Nó contendo a chave
+ * @param idx Índice da chave
+ * @param pred Ponteiro para armazenar o predecessor
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_predecessor(node_t *node, int idx, int *pred) {
+  if (!node || !pred || idx < 0 || idx >= node->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
   if (node->is_leaf)
-    return;
+    return BTREE_ERROR_INVALID_PARAM;
 
-  int idx = node_keyidx(node, key);
-  if (idx == -1) {
-    printf("Key not found on node:");
-    node_print(node);
-    printf("\n");
-    return;
-  }
+  // Vai para o filho à esquerda da chave
+  node_t *curr = node->children[idx];
+  if (!curr)
+    return BTREE_ERROR_INVALID_PARAM;
 
-  for (int i = idx; i < node->n_keys; i++)
-    node->keys[i] = node->keys[i + 1];
-}
+  // Desce até o elemento mais à direita (maior valor)
+  while (!curr->is_leaf) {
+    if (!curr->children[curr->n_keys])
+      return BTREE_ERROR_INVALID_PARAM;
 
-node_t *pred(node_t *node, int key, int *p) {
-  int idx = node_keyidx(node, key);
-  if (idx == -1) {
-    printf("Chave não encontrada no nó.\n");
-    return NULL;
-  }
-
-  node_t *curr = !node->is_leaf ? node->children[idx] : node;
-  while (!curr->is_leaf)
     curr = curr->children[curr->n_keys];
-
-  *p = curr->keys[curr->n_keys - 1];
-  return curr;
-}
-
-node_t *succ(node_t *node, int key, int *s) {
-  int idx = node_keyidx(node, key);
-  if (idx == -1) {
-    printf("Chave não encontrada no nó.\n");
-    return NULL;
   }
 
-  node_t *curr = !node->is_leaf ? node->children[idx + 1] : node;
-  while (!curr->is_leaf)
+  if (curr->n_keys <= 0)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  *pred = curr->keys[curr->n_keys - 1];
+  return BTREE_SUCCESS;
+}
+
+/**
+ * Encontra o sucessor de uma chave
+ *
+ * @param node Nó contendo a chave
+ * @param idx Índice da chave
+ * @param succ Ponteiro para armazenar o sucessor
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_successor(node_t *node, int idx, int *succ) {
+  if (!node || !succ || idx < 0 || idx >= node->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  if (node->is_leaf)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  // Vai para o filho à direita da chave
+  node_t *curr = node->children[idx + 1];
+  if (!curr)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  // Desce até o elemento mais à esquerda (menor valor)
+  while (!curr->is_leaf) {
+    if (!curr->children[0])
+      return BTREE_ERROR_INVALID_PARAM;
+
     curr = curr->children[0];
-
-  *s = curr->keys[0];
-  return curr;
-}
-
-void merge(node_t *n, node_t *m) {
-  for (int i = 0; i < m->n_keys; i++)
-    n->keys[n->n_keys + i] = m->keys[i];
-
-  if (!m->is_leaf)
-    for (int i = 0; i <= m->n_keys; i++)
-      n->children[n->n_keys + i + 1] = m->children[i];
-
-  n->n_keys += m->n_keys;
-  node_destroy(m);
-}
-
-int node_remove(node_t *node, int key, size_t order) {
-  int idx;
-  node_t *n = node_search(node, key, &idx);
-  if (!n) {
-    printf("Chave não encontrada.\n");
-    return 0;
   }
+
+  if (curr->n_keys <= 0)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  *succ = curr->keys[0];
+  return BTREE_SUCCESS;
+}
+
+/**
+ * Mescla dois nós filhos de um nó
+ *
+ * @param parent Nó pai
+ * @param idx Índice do primeiro filho
+ * @param order Ordem da árvore
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_merge(node_t *parent, int idx, size_t order) {
+  if (!parent || idx < 0 || idx >= parent->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  node_t *l_child = parent->children[idx];
+  node_t *r_child = parent->children[idx + 1];
+
+  if (!l_child || !r_child)
+    return BTREE_ERROR_INVALID_PARAM;
 
   int t = ceil(order / 2.0);
 
-  /**
-   * Caso 1:
-   * Chave 'key' está em um nó folha e este nó possui o min. chaves + 1
-   *  -> Remove a chave da árvore.
-   */
-  if (n->is_leaf && n->n_keys >= t)
-    node_rmleaf(n, key, order);
+  // Move a chave do pai para o filho à esquerda
+  l_child->keys[l_child->n_keys] = parent->keys[idx];
 
-  // Caso 2: Chave 'key' está em um nó interno
-  if (!n->is_leaf) {
-    /**
-     * Caso 2.A: O filho à esquerda de 'key' possui pelo menos ceil(order / 2)
-     * chaves:
-     *    * Encontra pred(key) na subárvore à esquerda, remove pred(key) do nó
-     * folha e substitui 'key' por pred(key)
-     */
-    if (idx <= n->n_keys && n->children[idx]->n_keys >= t) {
-      int p;
-      node_t *m = pred(node, key, &p);
-      node_rmleaf(m, p, order);
-      n->keys[idx] = p;
-    }
-    /**
-     * Caso 2.B: O filho à direita de 'key' possui pelo menos ceil(order / 2)
-     * chaves:
-     *  * Encontra succ(key) na subárvore à direita, remove succ(key) do nó
-     * folha e substitui 'key' por succ(key)
-     */
-    else if (idx < n->n_keys && n->children[idx + 1]->n_keys >= t) {
-      int s;
-      node_t *m = succ(node, key, &s);
-      node_rmleaf(m, s, order);
-      n->keys[idx] = s;
-    }
-    /**
-     * Caso 2.C: Ambos possuem o mínimo de chaves em um nó, de modo que remover
-     * uma chave viola a propriedade da árvore:
-     *  * Junta filho da esquerda e da direita de 'key' e remove a chave de x
-     */
-    else {
-      merge(n->children[idx], n->children[idx + 1]);
-      node_remove(n, key, order);
-    }
-  } else {
-    /**
-     * Caso 3: Chave não está presente no nó interno 'node':
-     *  Determine a subárvore c que contém k. Caso a raíz da subárvore c possua
-     * apenas ceil(order / 2) - 1:
-     */
-    idx = 0;
-    while (idx < node->n_keys && key > node->keys[idx])
-      idx++;
+  // Move todas as chaves do filho à direita para o filho à esquerda
+  for (int i = 0; i < r_child->n_keys; i++)
+    l_child->keys[l_child->n_keys + 1 + i] = r_child->keys[i];
 
-    n = node->children[idx];
+  // Move também ponteiros para filhos, se não for folha
+  if (!l_child->is_leaf)
+    for (int i = 0; i <= r_child->n_keys; i++)
+      l_child->children[l_child->n_keys + 1 + i] = r_child->children[i];
 
-    if (n->n_keys <= t - 1) {
-      /**
-       * Caso 3.A: A raiz da subárvore c possui pelo menos ceil(order / 2) - 1
-       * chaves e um irmão adjascente com ceil(order / 2) chaves:
-       *  - Redistribuição
-       */
-      node_t *m;
+  // Atualiza número de chaves filho à esquerda
+  l_child->n_keys += r_child->n_keys + 1;
 
-      // irmão esquerdo
-      if (idx > 0 && node->children[idx - 1]->n_keys >= t) {
-        m = node->children[idx - 1];
-
-        node_insertnf(n, node->keys[idx - 1], order);
-
-        node->keys[idx - 1] = m->keys[m->n_keys - 1];
-        node_rmleaf(m, m->keys[m->n_keys - 1], order);
-      }
-      // irmão direito
-      else if (idx <= node->n_keys && node->children[idx + 1]->n_keys >= t) {
-        m = node->children[idx + 1];
-
-        node_insertnf(n, node->keys[idx], order);
-
-        node->keys[idx + 1] = m->keys[0];
-        node_rmleaf(m, m->keys[0], order);
-      }
-      /**
-       * Caso 3.C: A raíz da subárvore e ambos seus irmãos possuem ceil(order /
-       * 2) - 1 chaves:
-       *  - Concatenação
-       */
-      else {
-        m = node->children[idx + 1];
-
-        node_insertnf(n, node->keys[idx], order);
-        merge(n, m);
-
-        for (int i = idx; i < node->n_keys - 1; i++)
-          node->keys[idx] = node->keys[idx + 1];
-      }
-    }
+  // Remove chave do pai e ajusta ponteiros
+  for (int i = idx; i < parent->n_keys - 1; i++) {
+    parent->keys[i] = parent->keys[i + 1];
+    parent->children[i + 1] = parent->children[i + 2];
   }
 
-  return 1;
+  parent->n_keys--;
+
+  // Libera memória do filho à direita
+  node_destroy(r_child);
+
+  return BTREE_SUCCESS;
 }
 
-// int node_keyidx(node_t *node, int key) {
-//   int idx = 0;
-//   while (idx < node->n_keys && node->keys[idx] < key)
-//     idx++;
-//
-//   return idx;
-// }
-//
-// /**
-//  * Retorna o predecessor de node->keys[idx]
-//  *
-//  * predecessor: chave mais à direita da subárvore à esquerda de
-//  node->keys[idx]
-//  */
-// int node_pred(node_t *node, int idx) {
-//   node_t *curr = node->children[idx];
-//   while (!curr->is_leaf)
-//     curr = curr->children[curr->n_keys];
-//
-//   return curr->keys[curr->n_keys - 1];
-// }
-//
-// /**
-//  * Retorna o sucessor de node->keys[idx]
-//  *
-//  * sucessor: chave mais à esquerda da subárvore à direita de node->keys[idx]
-//  */
-// int node_suc(node_t *node, int idx) {
-//   node_t *curr = node->children[idx + 1];
-//   while (!curr->is_leaf)
-//     curr = curr->children[0];
-//
-//   return curr->keys[0];
-// }
-//
-// /**
-//  * Function to merge node->children[idx] with node->children[idx+1]
-//  * node->children[idx+1] is freed after merging
-//  */
-// void node_merge(node_t *node, int idx, size_t order) {
-//   node_t *child = node->children[idx];
-//   node_t *brother = node->children[idx + 1];
-//
-//   int t = ceil(order / 2.0);
-//
-//   child->keys[t - 1] = node->keys[idx];
-//
-//   // copiando chaves de node->children[idx+1] para node->children[idx]
-//   for (int i = 0; i < brother->n_keys; i++)
-//     child->keys[i + t] = brother->keys[i];
-//
-//   // copiando filhos de node->children[idx+1] para node->children[idx]
-//   if (!child->is_leaf)
-//     for (int i = 0; i <= brother->n_keys; i++)
-//       child->children[i + t] = brother->children[i];
-//
-//   // moving child pointers after (idx + 1) one step before
-//   for (int i = idx + 2; i <= node->n_keys; i++)
-//     node->children[i - 1] = node->children[i];
-//
-//   child->n_keys += brother->n_keys + 1;
-//   node->n_keys--;
-//
-//   node_destroy(brother);
-//   return;
-// }
-//
-// void node_brrwprev(node_t *node, int idx) {
-//   node_t *child = node->children[idx];
-//   node_t *prev = node->children[idx - 1];
-//
-//   // move todas as chaves em child um índice a frente
-//   for (int i = child->n_keys - 1; i >= 0; i--)
-//     child->keys[i + 1] = child->keys[i];
-//
-//   // se child não for folha, move todos os ponteiros um índice a frente
-//   if (!child->is_leaf)
-//     for (int i = child->n_keys; i >= 0; i--)
-//       child->children[i + 1] = child->children[i];
-//
-//   // primeira chave de child será igual à chave anterior ao idx de node
-//   child->keys[0] = node->keys[idx - 1];
-//
-//   if (!child->is_leaf)
-//     child->children[0] = prev->children[prev->n_keys];
-//
-//   node->keys[idx - 1] = prev->keys[prev->n_keys - 1];
-//
-//   child->n_keys++;
-//   prev->n_keys--;
-//
-//   return;
-// }
-//
-// void node_brrwnxt(node_t *node, int idx) {
-//   node_t *child = node->children[idx];
-//   node_t *next = node->children[idx + 1];
-//
-//   child->keys[child->n_keys] = node->keys[idx];
-//
-//   if (!child->is_leaf)
-//     child->children[child->n_keys + 1] = next->children[0];
-//
-//   node->keys[idx] = next->keys[0];
-//
-//   for (int i = 1; i < next->n_keys; i++)
-//     next->keys[i - 1] = next->keys[i];
-//
-//   if (!next->is_leaf)
-//     for (int i = 1; i <= next->n_keys; i++)
-//       next->children[i - 1] = next->children[i];
-//
-//   child->n_keys++;
-//   next->n_keys--;
-//
-//   return;
-// }
-//
-// void node_fill(node_t *node, int idx, int order) {
-//   int t = ceil(order / 2.0);
-//   if (idx != 0 && node->children[idx - 1]->n_keys >= t)
-//     node_brrwprev(node, idx);
-//   else if (idx != node->n_keys && node->children[idx + 1]->n_keys >= t)
-//     node_brrwnxt(node, idx);
-//   else {
-//     if (idx != node->n_keys)
-//       node_merge(node, idx, order);
-//     else
-//       node_merge(node, idx - 1, order);
-//   }
-//   return;
-// }
-//
-// int node_remove(node_t *node, int key, size_t order);
-//
-// void node_rmleaf(node_t *node, int idx) {
-//   for (int i = idx + 1; i < node->n_keys; i++)
-//     node->keys[i - 1] = node->keys[i];
-//
-//   node->n_keys--;
-//
-//   return;
-// }
-//
-// void node_rmint(node_t *node, int idx, size_t order) {
-//   int k = node->keys[idx];
-//
-//   int t = ceil(order / 2.0) - 1;
-//
-//   // Caso 2.A
-//   if (node->children[idx]->n_keys >= t) {
-//     int pred = node_pred(node, idx);
-//     node->keys[idx] = pred;
-//     node_remove(node->children[idx], pred, order);
-//   }
-//   // Caso 2.B
-//   else if (node->children[idx + 1]->n_keys >= t) {
-//     int suc = node_suc(node, idx);
-//     node->keys[idx] = suc;
-//     node_remove(node->children[idx + 1], suc, order);
-//   }
-//   // Caso 2.C
-//   else {
-//     node_merge(node, idx, order);
-//     node_remove(node->children[idx], k, order);
-//   }
-//   return;
-// }
-//
-// int node_remove(node_t *root, int key, size_t order) {
-//   int idx = node_keyidx(root, key);
-//
-//   if (idx < root->n_keys && root->keys[idx] == key) {
-//     if (root->is_leaf)
-//       node_rmleaf(root, idx);
-//     else
-//       node_rmint(root, idx, order);
-//   } else {
-//     if (root->is_leaf) {
-//       printf("Key not present in tree.\n");
-//       return 0;
-//     }
-//
-//     bool flag = idx == root->n_keys;
-//     int t = ceil(order / 2.0) - 1;
-//
-//     if (root->children[idx]->n_keys < t)
-//       node_fill(root, idx, order);
-//
-//     if (flag && idx > root->n_keys)
-//       node_remove(root->children[idx - 1], key, order);
-//     else
-//       node_remove(root->children[idx], key, order);
-//   }
-//
-//   return 1;
-// }
+/**
+ * Remove uma chave de um nó folha
+ *
+ * @param node Nó de onde remover
+ * @param idx Índice da chave
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_remove_from_leaf(node_t *node, int idx) {
+  if (!node || idx < 0 || idx >= node->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  // Move todas as chaves à frente de node->keys[idx] uma posição para trás
+  for (int i = idx; i < node->n_keys - 1; i++)
+    node->keys[i] = node->keys[i + 1];
+
+  node->n_keys--;
+  return BTREE_SUCCESS;
+}
+
+/**
+ * Remove uma chave da árvore
+ *
+ * @param node Raiz da subárvore onde buscar e remover
+ * @param key Chave a ser removida
+ * @param order Ordem da árvore
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_remove(node_t *node, int key, size_t order);
+
+/**
+ * Remove uma chave de um nó interno
+ *
+ * @param node Nó de onde remover
+ * @param idx Índice da chave
+ * @param order Ordem da chave
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_remove_from_internal(node_t *node, int idx, size_t order) {
+  if (!node || idx < 0 || idx >= node->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  int key = node->keys[idx];
+  int t = ceil(order / 2.0);
+
+  // Caso 2a: O filho à esquerda tem pelo menos t chaves
+  if (node->children[idx]->n_keys >= t) {
+    int pred;
+    if (node_predecessor(node, idx, &pred) != BTREE_SUCCESS)
+      return BTREE_ERROR_INVALID_PARAM;
+
+    node->keys[idx] = pred;
+
+    // Remove recursivamente o predecessor
+    return node_remove(node->children[idx], pred, order);
+  }
+  // Caso 2b: O filho à direita tem pelo menos t chaves
+  else if (node->children[idx + 1]->n_keys >= t) {
+    int succ;
+    if (node_successor(node, idx, &succ) != BTREE_SUCCESS)
+      return BTREE_ERROR_INVALID_PARAM;
+
+    node->keys[idx] = succ;
+
+    // Remove recursivamente o sucessor
+    return node_remove(node->children[idx + 1], succ, order);
+  }
+
+  // Caso 2c: Ambos os filhos têm menos de t chaves
+
+  // Mescla os filhos e depois remove a chave do filho mesclado
+  int result = node_merge(node, idx, order);
+  if (result != BTREE_SUCCESS)
+    return result;
+
+  return node_remove(node->children[idx], key, order);
+}
+
+/**
+ * Garante que o filho na posição idx tenha pelo menos ⌈order/2⌉ - 1 chaves
+ *
+ * @param node Nó pai
+ * @param idx Índice do filho
+ * @param order Ordem da árvore
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int node_ensure_min_keys(node_t *node, int idx, size_t order) {
+  if (!node || idx < 0 || idx > node->n_keys)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  node_t *child = node->children[idx];
+  if (!child)
+    return BTREE_ERROR_INVALID_PARAM;
+
+  int t = ceil(order / 2.0);
+
+  if (child->n_keys >= t)
+    return BTREE_SUCCESS;
+
+  // Caso 3a-esq: Empresta uma chave do irmão à esquerda
+  if (idx > 0 && node->children[idx - 1]->n_keys >= t) {
+    node_t *l_sibling = node->children[idx - 1];
+
+    // Move todas as chaves uma posição para a direita
+    for (int i = child->n_keys - 1; i >= 0; i--)
+      child->keys[i + 1] = child->keys[i];
+
+    // Move os ponteiros para filhos também, se não for folha
+    if (!child->is_leaf)
+      for (int i = child->n_keys; i >= 0; i--)
+        child->children[i + 1] = child->children[i];
+
+    // Move a chave do pai para a primeira posição da chave filha
+    child->keys[0] = node->keys[idx - 1];
+
+    // O primeiro filho recebe o último filho do pai, se não for folha
+    if (!child->is_leaf)
+      child->children[0] = l_sibling->children[l_sibling->n_keys];
+
+    node->keys[idx - 1] = l_sibling->keys[l_sibling->n_keys - 1];
+
+    // Atualiza contadores
+    child->n_keys++;
+    l_sibling->n_keys--;
+
+    return BTREE_SUCCESS;
+  }
+  // Caso 3a-dir: Empresta uma chave do irmão à direita
+  else if (idx < node->n_keys && node->children[idx + 1]->n_keys >= t) {
+    node_t *r_sibling = node->children[idx + 1];
+
+    // Última chave do filho recebe chave do pai
+    child->keys[child->n_keys] = node->keys[idx];
+
+    // Se não for folha, também recebe o filho
+    if (!child->is_leaf)
+      child->children[child->n_keys + 1] = r_sibling->children[0];
+
+    // Pai recebe primeira chave de r_sibling
+    node->keys[idx] = r_sibling->keys[0];
+
+    for (int i = 1; i < r_sibling->n_keys; i++)
+      r_sibling->keys[i - 1] = r_sibling->keys[i];
+
+    if (!r_sibling->is_leaf)
+      for (int i = 1; i <= r_sibling->n_keys; i++)
+        r_sibling->children[i - 1] = r_sibling->children[i];
+
+    child->n_keys++;
+    r_sibling->n_keys--;
+
+    return BTREE_SUCCESS;
+  }
+
+  // Caso 3b: Mescla com um irmão
+  if (idx < node->n_keys)
+    return node_merge(node, idx, order);
+  else
+    return node_merge(node, idx - 1, order);
+}
+
+int node_remove(node_t *node, int key, size_t order) {
+  if (!node)
+    return BTREE_ERROR_NOT_FOUND;
+
+  int idx = 0;
+  while (idx < node->n_keys && key > node->keys[idx])
+    idx++;
+
+  // Casos 1 e 2
+  if (idx < node->n_keys && key == node->keys[idx]) {
+    // Caso 1: Nó folha -> simplesmente remove chave
+    if (node->is_leaf)
+      return node_remove_from_leaf(node, idx);
+    // Casos 2
+    else
+      return node_remove_from_internal(node, idx, order);
+  }
+
+  // Se for nó folha, chave não está na árvore
+  if (node->is_leaf)
+    return BTREE_ERROR_NOT_FOUND;
+
+  bool is_last = idx == node->n_keys;
+
+  // Garantir que o filho onde a busca continua tenha pelo menos ⌈order/2⌉
+  // chaves
+  int result = node_ensure_min_keys(node, idx, order);
+  if (result != BTREE_SUCCESS)
+    return result;
+
+  if (is_last && idx > node->n_keys)
+    return node_remove(node->children[idx - 1], key, order);
+  else
+    return node_remove(node->children[idx], key, order);
+}
 
 void node_print(node_t *node) {
+  if (!node) {
+    printf("[ NULL ]");
+    return;
+  }
+
   printf("[ ");
   for (int i = 0; i < node->n_keys; i++) {
     printf("key%d: %d", i, node->keys[i]);
@@ -616,22 +635,20 @@ void node_print(node_t *node) {
 }
 
 struct btree {
-  size_t order;   // order of the tree, i.e. the maximum amount of children a
-                  // single node has
-  node_t *root;   // pointer to the root node of the tree
-  size_t n_nodes; // number of nodes the tree currently has
+  size_t order;   // Ordem da árvore
+  node_t *root;   // Ponteiro para o nó raiz
+  size_t n_nodes; // Número de nós na árvore
 };
 
 btree_t *btree_create(size_t order) {
-  btree_t *tree = malloc(sizeof(btree_t));
+  if (order < 3)
+    return NULL;
 
-  if (!tree) {
-    perror("Erro na alocação de memória.");
-    exit(EXIT_FAILURE);
-  }
+  btree_t *tree = malloc(sizeof(btree_t));
+  if (!tree)
+    return NULL;
 
   tree->order = order;
-
   tree->root = NULL;
   tree->n_nodes = 0;
 
@@ -651,12 +668,20 @@ node_t *btree_search(btree_t *tree, int key, int *pos) {
   return node_search(tree->root, key, pos);
 }
 
-void btree_insert(btree_t *tree, int key) {
-  tree->n_nodes += node_insert(&tree->root, key, tree->order);
+int btree_insert(btree_t *tree, int key) {
+  int result = node_insert(&tree->root, key, tree->order);
+  if (result == BTREE_SUCCESS)
+    tree->n_nodes++;
+
+  return result;
 }
 
-void btree_remove(btree_t *tree, int key) {
-  tree->n_nodes -= node_remove(tree->root, key, tree->order);
+int btree_remove(btree_t *tree, int key) {
+  int result = node_remove(tree->root, key, tree->order);
+  if (result == BTREE_SUCCESS)
+    tree->n_nodes--;
+
+  return result;
 }
 
 void btree_print(btree_t *tree) {

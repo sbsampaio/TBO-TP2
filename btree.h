@@ -3,53 +3,77 @@
 
 #include <stdlib.h>
 
+// Códigos de erro para retorno das funções
+#define BTREE_SUCCESS 0
+#define BTREE_ERROR_ALLOC -1
+#define BTREE_ERROR_NOT_FOUND -2
+#define BTREE_ERROR_DUPLICATE -3
+#define BTREE_ERROR_INVALID_PARAM -4
+
 typedef struct node node_t;
 
 typedef struct btree btree_t;
 
+/**
+ * Imprime um nó
+ *
+ * @param node Nó a ser impresso
+ */
 void node_print(node_t* node);
 
 /**
- * The function allocates, dinamically, a pointer to the type btree
+ * Cria uma nova árvore B e aloca memória para ela
  *
- * If some error happens during the allocation, the function returns NULL
+ * @param order Ordem da árvore (mínimo 3)
  *
- * @param order The order, or the amount of children, a single node has
- *
- * @return The pointer allocated
+ * @return Ponteiro para a nova árvore ou NULL em caso de erro
  */
 btree_t* btree_create(size_t order);
 
 /**
- * The function recursively destroys the B Tree
- * In other words, the function frees the memory
- * allocated related to the pointer and all nodes inside the tree
+ * Destrói a árvore B e libera a memória alocada
  *
- * @param tree A valid pointer to a btree_t variable
- *
- * @post The memory allocated in the pointer is freed, and also all
- * memory of the nodes inside the tree
+ * @param tree Ponteiro para uma árvore B alocada
  */
 void btree_destroy(btree_t* tree);
 
 /**
- * The function recursively searches all nodes until the one with the key is found
+ * Função que busca uma chave na árvore
  *
- * If the key is not in any node in the tree, the function returns NULL
+ * @param tree Ponteiro para árvore B
+ * @param key Chave a ser buscada
+ * @param pos Ponteiro para pos que irá guardar o índice da chave encontrada
+ * ou -1 se não encontrada
  *
- * @param tree A valid pointer to a btree_t variable
- * @param key Key to search
- * @param pos A pointer to an integer that after the function is executed,
- * it contains the index of the key found, -1 if the key is not found
- *
- * @return A pointer to the node where the key was found
+ * @return Ponteiro para o nó encontrado ou NULL caso contrário
  */
 node_t* btree_search(btree_t* tree, int key, int* pos);
 
-void btree_insert(btree_t* tree, int key);
+/**
+ * Função para inserir uma chave na árvore
+ *
+ * @param tree Ponteiro para árvore B
+ * @param key Chave a ser inserida
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int btree_insert(btree_t* tree, int key);
 
-void btree_remove(btree_t* tree, int key);
+/**
+ * Remove uma chave da árvore
+ *
+ * @param tree Ponteiro para árvore B
+ * @param key Chave a ser removida
+ *
+ * @return BTREE_SUCCESS em caso de sucesso ou código de erro
+ */
+int btree_remove(btree_t* tree, int key);
 
+/**
+ * Imprime a árvore na saída padrão
+ *
+ * @param tree Ponteiro para árvore B
+ */
 void btree_print(btree_t* tree);
 
 #endif // !BTREE_H

@@ -10,7 +10,7 @@ int main(int argc, char const *argv[]) {
   for (int i = 0; i < 20; i++)
     btree_insert(tree, rand() % 50 + 1);
 
-  // btree_print(tree);
+  btree_print(tree);
 
   btree_remove(tree, 17);
 
