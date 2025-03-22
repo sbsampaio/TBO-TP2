@@ -1,0 +1,71 @@
+
+
+-- ARVORE B
+[key0: 20,  ]
+
+
+
+
+-- ARVORE B
+[key0: 20, key1: 75,  ]
+
+
+
+
+-- ARVORE B
+[key0: 20, key1: 75, key2: 77,  ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+
+
+-- ARVORE B
+[key0: 75,  ]
+[ ][ ]
+
+
+O REGISTRO NAO ESTA NA ARVORE!
+O REGISTRO NAO ESTA NA ARVORE!
+O REGISTRO NAO ESTA NA ARVORE!
+O REGISTRO NAO ESTA NA ARVORE!
